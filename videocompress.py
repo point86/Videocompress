@@ -13,7 +13,7 @@ class MainWindow(QWidget):
             "If input is an entire directory, this program will create another folder with the same structure and all the same files, the\n"\
             "only difference is that all video files will be the output of ffmpeg execution (non video files will be copied)."
     FFMPEG_SITE = "Need more options? <a href=\"https://ffmpeg.org/\">FFmpeg offical site</a> has all the documentation you will need."
-    REPOSITORY = "Created by Paolo Venturato and distribuited under the MIT license. <a href=\"https://www.github.com\">Fork me on GitHub</a>"
+    REPOSITORY = "Created by Paolo Venturato and distribuited under the MIT license. <a href=\"https://github.com/point86/Videocompress\">Fork me on GitHub</a>"
     FFMPEGSETTINGS_DEF = "-c:v libx264 -crf 26"
 
     inputPath = None
