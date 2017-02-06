@@ -84,9 +84,7 @@ class Worker(QObject):
                 if count >= trigger:
                     count = 0
                     self.emitProgress.emit(round(100/self.totSize*self.processedSize), round(100/fileSize*copied))
-            fsrc.close()
-            fdrc.close()
-        except:
+        except Exception as e:
             self.errors.append(inputPath)
         shutil.copymode(inputPath, outputPath, follow_symlinks=False)
 
