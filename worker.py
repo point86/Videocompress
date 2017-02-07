@@ -10,7 +10,7 @@ VIDEO_EXTENSIONS = [".mp4",".avi",".mkv",".3gp"] #most used video extensions
 
 
 class Worker(QObject):
-    finished = pyqtSignal(list) #taskPerformer onThreadFinished() will be called
+    finished = pyqtSignal() #taskPerformer onThreadFinished() will be called
     emitLog = pyqtSignal(str) #emit log to taskPerformer (displayLog(i))
     emitProgress = pyqtSignal(int, int) #emit progress to taskPerformer
     #string format: Duration: 00:02:00.92, start: 0.000000, bitrate: 10156 kb/s
@@ -21,7 +21,9 @@ class Worker(QObject):
     totSize = 0 # tot files size
     thick = 0
     processedSize = 0
-    errors = []
+    copied = 0
+    converted = 0
+    fails = 0
 
     def __init__(self, inputPath, outputPath, ffmpeg_opt, parent=None):
         super(Worker, self).__init__(parent)
@@ -49,9 +51,9 @@ class Worker(QObject):
         sec = time.time() - time_start
         m, s = divmod(sec, 60)
         h, m = divmod(m, 60)
-        self.emitLog.emit("Total time: %d:%02d:%02d sec\n" %(h,m,s))
-        self.emitLog.emit("Now it's safe to close this window.\n")
-        self.finished.emit(self.errors)
+        self.emitLog.emit("Total time: %d:%02d:%02d sec - It's now safe to close this window.\n" %(h,m,s))
+        self.emitLog.emit("Converted files: %d - copied files: %d - errors: %d" % (self.converted, self.copied, self.fails))
+        self.finished.emit()
 
 
     @pyqtSlot(str)
@@ -70,37 +72,48 @@ class Worker(QObject):
         count = 0
         copied=0
         self.emitProgress.emit(round(100/self.totSize*self.processedSize), 0)
-        try:
-            fsrc = open(inputPath, 'rb')
-            fdst = open(outputPath, 'wb')
-            while 1:
-                buf = fsrc.read(length)
-                if not buf:
-                    break
-                fdst.write(buf)
-                copied += len(buf)
-                count += len(buf)
-                self.processedSize += len(buf)
-                if count >= trigger:
-                    count = 0
-                    self.emitProgress.emit(round(100/self.totSize*self.processedSize), round(100/fileSize*copied))
-        except Exception as e:
-            self.errors.append(inputPath)
+        fsrc = open(inputPath, 'rb')
+        fdst = open(outputPath, 'wb')
+        while 1:
+            buf = fsrc.read(length)
+            if not buf:
+                break
+            fdst.write(buf)
+            copied += len(buf)
+            count += len(buf)
+            self.processedSize += len(buf)
+            if count >= trigger:
+                count = 0
+                self.emitProgress.emit(round(100/self.totSize*self.processedSize), round(100/fileSize*copied))
         shutil.copymode(inputPath, outputPath, follow_symlinks=False)
+
+
+
 
     #convert file only if it's a video, otherwise copy it
     #input_file: type(input_file) = type(output_file) = pathlib.Path
     def convert_or_copy(self, input_file, output_dir):
         if self.continueWork == False:
             return
-
         output_name = output_dir / input_file.name
-
-        if input_file.suffix in VIDEO_EXTENSIONS:
-            self.convert_file(input_file, output_name)
+        self.emitProgress.emit(round(100/self.totSize*self.processedSize), 0)
+        self.emitLog.emit("Processing: %s " % str(input_file))
+        try:
+            if input_file.suffix in VIDEO_EXTENSIONS:
+                self.convert_file(input_file, output_name)
+                self.converted += 1
+            else:
+                self.copy(input_file, output_name)
+                self.copied += 1
+        except Exception as e:
+            self.emitLog.emit("- Failed\n   %s\n" % str(e))
+            self.fails += 1
         else:
-            self.emitLog.emit("Copying: %s to %s\n" % (input_file, output_dir))
-            self.copy(input_file, output_name)
+            self.emitLog.emit("- OK\n")
+        finally:
+            self.emitProgress.emit(round(100/self.totSize*self.processedSize), 100)
+
+
 
     #scan all inputPath and perform operations
     def fileManager(self, inputPath, outputPath):
@@ -127,17 +140,16 @@ class Worker(QObject):
     def convert_file(self, input_name, output_name):
         if self.continueWork == False:
             return
-        self.emitLog.emit("Converting: %s\n" % str(input_name))
         fileSize = input_name.stat().st_size
         cthick = 0
         progress=0
         length=0
-        self.emitProgress.emit(round(100/self.totSize*self.processedSize), 0)
         DQ="\""
         #ffmpeg: sane values are between 18 and 28
         #https://trac.ffmpeg.org/wiki/Encode/H.264
         #ffmpeg -i input.mp4 -c:v libx264 -crf 26 output.mp4
         self.proc = subprocess.Popen("ffmpeg -y -loglevel info -i " + DQ + str(input_name) + DQ + " -c:v libx264 -crf 26 " + DQ+str(output_name)+DQ,stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=1, universal_newlines=True)
+
         while True:
             #another way is to use ffmpeg -y -progress filename ....and parse filename, but there are the same info ffmpeg print to stderr.
             sys.stderr.flush()
@@ -160,17 +172,12 @@ class Worker(QObject):
                     ss=float(p.group(3)) #secs (floating point, ex: 21.95)
                     duration = hh*3600+mm*60+ss
                     cthick = 100/duration
-
-            #sys.stderr.flush()
             if self.proc.poll() == 0:
-                self.emitLog.emit("OK....%s\n"% input_name)
                 break
             elif self.proc.poll()==1:
-                self.emitLog.emit("Failed! %s\n" % input_name)
-                self.errors.append(str(input_name))
+                raise Exception("ffmpeg exited with error converting %s." % str(input_name)) #TODO which error?
                 break
         self.processedSize += fileSize
-        self.emitProgress.emit(round(100/self.totSize*self.processedSize), 100)
 
     def getTotalSize(self, inputPath): #type (inputPath) = <class pathlib>
         #inputPath is a file:

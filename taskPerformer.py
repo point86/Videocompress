@@ -68,16 +68,11 @@ class TaskPerformer(QDialog):
         self.currProgBar.setValue(current)
         self.totalProBar.setValue(total)
 
-    def onThreadFinished(self, errList):
+    def onThreadFinished(self):
         self.thread.quit()
         self.btt_ok.setEnabled(True)
         self.btt_cancel.setEnabled(False)
-        #display errors (if there are any)
-        if errList:
-            self.logWindow.appendHtml("<font color=\"Red\">Error processing the following file:")
-            for e in errList:
-                self.logWindow.appendHtml("<font color=\"Red\"> %s" % e)
-
+        
 
     def displayLog(self, i):
         self.logWindow.insertPlainText(i)
