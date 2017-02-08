@@ -2,7 +2,7 @@ from PyQt5.QtGui import *
 from PyQt5.QtCore import *
 from PyQt5.QtWidgets import *
 import sys
-from worker import Worker
+import worker
 
 class TaskPerformer(QDialog):
     def __init__(self, inputPath, outputDir, ffmpeg_opt,  parent=None):
@@ -48,7 +48,7 @@ class TaskPerformer(QDialog):
         #thread that will perform all operations
         self.thread = QThread()
         #class that do the work
-        self.obj = Worker(self.inputPath, self.outputDir, self.ffmpeg_opt)
+        self.obj = worker.Worker(self.inputPath, self.outputDir, self.ffmpeg_opt)
         #connect signals
         self.obj.emitLog.connect(self.displayLog)
         self.obj.finished.connect(self.onThreadFinished)
@@ -72,10 +72,13 @@ class TaskPerformer(QDialog):
         self.thread.quit()
         self.btt_ok.setEnabled(True)
         self.btt_cancel.setEnabled(False)
-        
 
-    def displayLog(self, i):
-        self.logWindow.insertPlainText(i)
+
+    def displayLog(self, loglevel, text):
+        if loglevel == worker.INFO:
+            self.logWindow.insertPlainText(text)
+        if loglevel == worker.ERROR: #error, print in red color
+            self.logWindow.appendHtml("<font color=\"Red\">%s<br>" % text)
 
     def cancel_btt(self):
         msg = QMessageBox()
