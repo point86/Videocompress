@@ -65,8 +65,8 @@ class TaskPerformer(QDialog):
 
 
     def updateProgress(self, total, current):
-        self.currProgBar.setValue(current)
         self.totalProBar.setValue(total)
+        self.currProgBar.setValue(current)
 
     def onThreadFinished(self):
         self.thread.quit()
