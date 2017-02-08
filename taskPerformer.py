@@ -92,8 +92,7 @@ class TaskPerformer(QDialog):
             #insertPlainText: insert text to the end
             #self.logWindow.appendPlainText("Sending TERM signal...\n") #empty line before the text (so a new paragraph)
             self.obj.continueWork = False
-            #sigterm signal
-            if self.obj.proc.poll() == None:
-                self.obj.proc.terminate()
-            QMetaObject.invokeMethod(self.obj, 'termSignal', Qt.QueuedConnection, Q_ARG(str, "terminate"))
+            if self.obj.proc:
+                if self.obj.proc.poll() == None:
+                    self.obj.proc.terminate()       #sigterm signal
             self.logWindow.appendHtml("<font color=\"Red\">Sending TERM signal...\n")

@@ -11,12 +11,17 @@ VIDEO_EXTENSIONS = [".mp4",".avi",".mkv",".3gp", ".mov"] #most used video extens
 
 INFO = 0  #loglevel
 ERROR = 1 #loglevel
+#string format: Duration: 00:02:00.92, start: 0.000000, bitrate: 10156 kb/s
+durationRegex = re.compile("[ ]+Duration: (\d{2}):(\d{2}):(\d{2}.\d{2})")
+#string format: frame=  361 fps= 51 q=32.0 size=    1792kB time=00:00:12.04 bitrate=1219.0kbits/s speed=1.71x
+progressRegex = re.compile("frame=[ 0-9]+fps=[ 0-9\.]+q=[ 0-9\.\-]+L*size=[ 0-9]+[bBkKgGmM ]+time=(\d{2}):(\d{2}):(\d{2}.\d{2})")
 
 class Worker(QObject):
     finished = pyqtSignal() #taskPerformer onThreadFinished() will be called
     emitLog = pyqtSignal(int, str) #emit log to taskPerformer (displayLog(i))
     emitProgress = pyqtSignal(int, int) #emit progress to taskPerformer
 
+    proc = None
     continueWork = True
     totSize = processedSize = 0 # tot files size
     converted = copied = fails = 0
@@ -32,7 +37,7 @@ class Worker(QObject):
         #collecting and printing stats
         time_start = time.time() #start time
         t = time.localtime(time_start) #convert time_start in a tuple, for easily extracting hour, min, sec
-        self.totSize = utils.getTotalSize(self.inputPath)
+        self.totSize = self.getTotalSize(self.inputPath)
         self.thick = 100/self.totSize
         self.emitLog.emit(INFO, "Launched at %d:%02d:%02d\n" %(t.tm_hour, t.tm_min, t.tm_sec))
         self.emitLog.emit(INFO, "Input path: %s\n" % str(self.inputPath))
@@ -51,29 +56,20 @@ class Worker(QObject):
         self.emitLog.emit(INFO, "Processed: %d - copied files: %d - errors: %d" % (self.converted, self.copied, self.fails))
         self.finished.emit()
 
-
-    @pyqtSlot(str)
-    def termSignal(self, text):
-        if text=="terminate":
-            self.proc.terminate()
-        self.finished.emit()
-
-
     #convert file only if it's a video, otherwise copy it
     #input_file: type(input_file) = type(output_file) = pathlib.Path
     def convert_or_copy(self, input_file, output_dir):
         if self.continueWork == False:
             return
         output_name = output_dir / input_file.name
-
         try:
             if input_file.suffix in VIDEO_EXTENSIONS:
                 self.emitLog.emit(INFO, "Converson: %s " % str(input_file))
-                self.processedSize += utils.convert_file(input_file, output_name, self.updProgress)
+                self.processedSize += self.convert_file(input_file, output_name, self.updProgress)
                 self.converted +=1
             else:
                 self.emitLog.emit(INFO, "Copy: %s " % str(input_file))
-                self.processedSize += utils.copy(input_file, output_name, self.updProgress)
+                self.processedSize += self.copy(input_file, output_name, self.updProgress)
                 self.copied +=1
         except Exception as e:
             self.emitLog.emit(INFO, "- Failed")
@@ -110,3 +106,76 @@ class Worker(QObject):
                     self.fileManager(item, destin_dir)
                 else:
                     self.convert_or_copy(item, outputPath)
+
+    #TODO: preserve input file permissions? (output file permission are different)
+    #conversion of a read-only file will generate a non-readonly file.
+    def convert_file(self, input_name, output_name, updProgress):
+        fileSize = input_name.stat().st_size
+        progress=0
+        DQ="\"" #double quote
+        #ffmpeg: sane values are between 18 and 28
+        #https://trac.ffmpeg.org/wiki/Encode/H.264
+        #ffmpeg -i input.mp4 -c:v libx264 -crf 26 output.mp4
+        self.proc = subprocess.Popen("ffmpeg -y -loglevel info -i " + DQ + str(input_name) + DQ + " -c:v libx264 -crf 26 " + DQ+str(output_name)+DQ,stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=1, universal_newlines=True)
+        while True:
+            #another way is to use ffmpeg -y -progress filename ....and parse filename, but there are the same info ffmpeg print to stderr.
+            sys.stderr.flush()
+            #read STDERR output (only for ffmpeg, because it have the option to send video output to stdout stream, so it uses stderr for logs.)
+            line=self.proc.stderr.readline()
+            p = re.match(progressRegex, line)
+            if p is not None:
+                #reading current time interval
+                hh=float(p.group(1)) #hours
+                mm=float(p.group(2)) #mins
+                ss=float(p.group(3)) #secs (floating point, ex: 21.95)
+                progress=hh*3600+mm*60+ss
+                updProgress(round(100/duration*progress), fileSize)
+            else:
+                #reading total video length
+                p=re.match(durationRegex,line)
+                if p is not None:
+                    hh=float(p.group(1)) #hours
+                    mm=float(p.group(2)) #mins
+                    ss=float(p.group(3)) #secs (floating point, ex: 21.95)
+                    duration = hh*3600+mm*60+ss
+            if self.proc.poll() == 0:
+                break
+            elif self.proc.poll()==1:
+                raise Exception("ffmpeg exited with error converting %s." % str(input_name))
+                break
+        self.proc=None
+        shutil.copymode(input_name, output_name, follow_symlinks=False)
+        return fileSize
+
+    #copy file inputPath to outputPath, calling callback every 250KB copied.
+    #(250=trigger value)
+    #https://hg.python.org/cpython/file/eb09f737120b/Lib/shutil.py#l215
+    def copy(self, inputPath, outputPath, updProgress):
+        length = 16*1024
+        trigger = 250*1024
+        fileSize = inputPath.stat().st_size
+        copied = count = 0
+        fsrc = open(inputPath, 'rb')
+        fdst = open(outputPath, 'wb')
+        while self.continueWork:
+            buf = fsrc.read(length)
+            if not buf:
+                break
+            fdst.write(buf)
+            copied += len(buf)
+            count += len(buf)
+            if count >= trigger:
+                count = 0
+                updProgress(round(100/fileSize*copied), fileSize)
+        shutil.copymode(inputPath, outputPath, follow_symlinks=False)
+        return fileSize
+
+    def getTotalSize(self, inputPath): #type (inputPath) = <class pathlib>
+        #inputPath is a file:
+        size = 0
+        if inputPath.is_file():
+            return inputPath.stat().st_size
+        #inputPath is a folder:
+        for item in inputPath.iterdir():
+            size += self.getTotalSize(item)
+        return size
