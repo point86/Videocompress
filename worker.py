@@ -5,7 +5,6 @@ import subprocess
 import re
 import shutil
 import pathlib
-import utils
 
 VIDEO_EXTENSIONS = [".mp4",".avi",".mkv",".3gp", ".mov"] #most used video extensions
 
@@ -73,7 +72,7 @@ class Worker(QObject):
                 self.copied +=1
         except Exception as e:
             self.emitLog.emit(INFO, "- Failed")
-            self.emitLog.emit(ERROR, "&nbsp;&nbsp;&nbsp;&rarr; %s" % str(e))
+            self.emitLog.emit(ERROR, "%s" % str(e))
             self.fails += 1
         else:
             self.emitLog.emit(INFO, "- OK\n")
@@ -87,11 +86,13 @@ class Worker(QObject):
 
     #scan all inputPath and perform operations
     def fileManager(self, inputPath, outputPath):
+        if self.continueWork == False:
+            return
         if inputPath == outputPath:
             self.emitLog.emit(ERROR, "ERROR!: input path is the same as output path\n")
             return
-        if self.continueWork == False:
-            return
+        if inputPath.is_file() and (inputPath.parent == outputPath):
+            self.emitLog.emit(ERROR, "ERROR!: input and output files must be in different folders.\n")
         if not outputPath.exists():
             self.emitLog.emit(INFO, "Creating dir: %s\n" % str(outputPath))
             outputPath.mkdir()
@@ -112,17 +113,22 @@ class Worker(QObject):
     def convert_file(self, input_name, output_name, updProgress):
         fileSize = input_name.stat().st_size
         progress=0
+        lastLine = slastLine = ""
         DQ="\"" #double quote
         #ffmpeg: sane values are between 18 and 28
         #https://trac.ffmpeg.org/wiki/Encode/H.264
         #ffmpeg -i input.mp4 -c:v libx264 -crf 26 output.mp4
-        self.proc = subprocess.Popen("ffmpeg -y -loglevel info -i " + DQ + str(input_name) + DQ + " -c:v libx264 -crf 26 " + DQ+str(output_name)+DQ,stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=1, universal_newlines=True)
+        self.proc = subprocess.Popen("ffmpeg -y -loglevel info -i " + DQ + str(input_name) + DQ + " " + self.ffmpeg_opt + " " + DQ+str(output_name)+DQ,stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=1, universal_newlines=True)
         while True:
             #another way is to use ffmpeg -y -progress filename ....and parse filename, but there are the same info ffmpeg print to stderr.
             sys.stderr.flush()
             #read STDERR output (only for ffmpeg, because it have the option to send video output to stdout stream, so it uses stderr for logs.)
             line=self.proc.stderr.readline()
+            if line:
+                slastLine = lastLine
+                lastLine = line
             p = re.match(progressRegex, line)
+
             if p is not None:
                 #reading current time interval
                 hh=float(p.group(1)) #hours
@@ -141,7 +147,7 @@ class Worker(QObject):
             if self.proc.poll() == 0:
                 break
             elif self.proc.poll()==1:
-                raise Exception("ffmpeg exited with error converting %s." % str(input_name))
+                raise Exception(" %s<br> %s" % (slastLine, lastLine))
                 break
         self.proc=None
         shutil.copymode(input_name, output_name, follow_symlinks=False)
